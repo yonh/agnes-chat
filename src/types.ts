@@ -67,3 +67,62 @@ export interface ImageGeneratedEvent {
 // Size options matching Agnes Image API
 export const SIZE_OPTIONS = ['1K', '2K', '3K', '4K'] as const;
 export const RATIO_OPTIONS = ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'] as const;
+
+// ---------------------------------------------------------------------------
+// Video Generation Types (Agnes Video V2.0)
+// ---------------------------------------------------------------------------
+
+export type VideoMode = 'text-to-video' | 'image-to-video' | 'keyframes';
+export type VideoResolution = '480p' | '720p' | '1080p';
+export type VideoAspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | '3:4';
+
+export interface VideoGenerationParams {
+  prompt: string;
+  mode: VideoMode;
+  image?: string;            // 图生视频：单张公网图片 URL
+  keyframeImages?: string[]; // 关键帧：多张公网图片 URL
+  resolution: VideoResolution;
+  aspectRatio: VideoAspectRatio;
+  numFrames: number;         // 目标帧数，须满足 8n+1 且 <= 441
+  frameRate: number;         // 帧率 1-60
+  negativePrompt?: string;
+  seed?: number;
+}
+
+export interface GeneratedVideo {
+  id: string;                 // video_id
+  prompt: string;
+  mode: VideoMode;
+  videoUrl?: string;
+  remoteUrl?: string;        // 原始视频链接（用于浏览器打开）
+  size?: string;
+  seconds?: string;
+  status: 'queued' | 'in_progress' | 'completed' | 'failed';
+  progress: number;
+  error?: string;
+  timestamp: number;
+}
+
+export interface VideoProgressEvent {
+  videoId: string;
+  status: string;
+  progress: number;
+}
+
+export interface VideoCompleteEvent {
+  videoId: string;
+  url?: string;
+  remoteUrl?: string;
+  size?: string;
+  seconds?: string;
+  error?: string;
+}
+
+export const VIDEO_RESOLUTION_OPTIONS = ['480p', '720p', '1080p'] as const;
+export const VIDEO_ASPECT_OPTIONS = ['16:9', '9:16', '1:1', '4:3', '3:4'] as const;
+export const VIDEO_DURATION_OPTIONS = [
+  { label: '约 3 秒', numFrames: 81 },
+  { label: '约 5 秒', numFrames: 121 },
+  { label: '约 10 秒', numFrames: 241 },
+  { label: '约 18 秒', numFrames: 441 },
+] as const;

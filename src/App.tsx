@@ -8,6 +8,7 @@ import {
   Trash2,
   Send,
   Image as ImageIcon,
+  Film,
   MessageSquare,
   Sparkles,
   Download,
@@ -24,6 +25,7 @@ import type { ChatMessage, StreamChunkEvent, GeneratedImage } from "./types";
 import { SIZE_OPTIONS, RATIO_OPTIONS } from "./types";
 
 import { cn } from "@/lib/utils";
+import { VideoGenerator } from "@/components/VideoGenerator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -735,6 +737,10 @@ export default function App() {
               <ImageIcon className="size-4" />
               图像生成
             </TabsTrigger>
+            <TabsTrigger value="video">
+              <Film className="size-4" />
+              视频生成
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -795,6 +801,11 @@ export default function App() {
         {/* ── Image ───────────────────────────────────── */}
         <TabsContent value="image" className="flex min-h-0 flex-1 flex-col">
           <ImageGenerator apiKey={apiKey} />
+        </TabsContent>
+
+        {/* ── Video ───────────────────────────────────── */}
+        <TabsContent value="video" className="flex min-h-0 flex-1 flex-col">
+          <VideoGenerator apiKey={apiKey} />
         </TabsContent>
       </Tabs>
 
