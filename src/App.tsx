@@ -20,11 +20,14 @@ import {
   Eye,
   EyeOff,
   Search,
+  Copy,
+  Check,
 } from "lucide-react";
 import type { ChatMessage, StreamChunkEvent, GeneratedImage } from "./types";
 import { SIZE_OPTIONS, RATIO_OPTIONS } from "./types";
 
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { VideoGenerator } from "@/components/VideoGenerator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -209,7 +212,18 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
   const [viewer, setViewer] = useState<GeneratedImage | null>(null);
+  const [copiedCopy, setCopiedCopy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const copyLink = async (img: GeneratedImage) => {
+    const url = img.url;
+    if (!url) return;
+    const ok = await copyText(url);
+    if (ok) {
+      setCopiedCopy(true);
+      setTimeout(() => setCopiedCopy(false), 1500);
+    }
+  };
 
   useEffect(() => {
     const unlisten = listen<string>("image-progress", (event) => {
@@ -555,6 +569,12 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
                   <Badge variant="secondary" className="text-[11px]">
                     {viewer.size} · {viewer.ratio}
                   </Badge>
+                  {viewer.url && (
+                    <Button size="sm" variant="secondary" onClick={() => copyLink(viewer)}>
+                      {copiedCopy ? <Check className="size-4 text-green-500" /> : <Copy className="size-4" />}
+                      {copiedCopy ? "已复制" : "复制链接"}
+                    </Button>
+                  )}
                   <Button size="sm" variant="secondary" onClick={() => downloadImage(viewer)}>
                     <Download className="size-4" />
                     下载原图

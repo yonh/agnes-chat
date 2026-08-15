@@ -9,6 +9,8 @@ import {
   X,
   Download,
   ExternalLink,
+  Copy,
+  Check,
   Loader2,
   Sparkles,
 } from "lucide-react";
@@ -25,6 +27,7 @@ import {
   VIDEO_DURATION_OPTIONS,
 } from "@/types";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -198,6 +201,23 @@ export function VideoGenerator({ apiKey }: { apiKey: string }) {
       a.remove();
     } catch {
       /* ignore */
+    }
+  };
+
+  const openRemote = (url: string) => {
+    import("@tauri-apps/plugin-shell")
+      .then(({ open }) => open(url))
+      .catch(() => window.open(url, "_blank"));
+  };
+
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const copyLink = async (videoId: string, url?: string) => {
+    if (!url) return;
+    const ok = await copyText(url);
+    if (ok) {
+      setCopiedId(videoId);
+      setTimeout(() => setCopiedId((cur) => (cur === videoId ? null : cur)), 1500);
     }
   };
 
@@ -445,18 +465,33 @@ export function VideoGenerator({ apiKey }: { apiKey: string }) {
                              {MODE_LABELS[v.mode]}
                            </Badge>
                          </div>
-                         <div className="flex items-center gap-1.5">
-                           {v.remoteUrl && (
-                             <Button
-                               type="button"
-                               size="icon-sm"
-                               variant="ghost"
-                               onClick={() => window.open(v.remoteUrl, "_blank")}
-                               title="打开原链接"
-                             >
-                               <ExternalLink className="size-4" />
-                             </Button>
-                           )}
+<div className="flex items-center gap-1.5">
+                            {v.remoteUrl && (
+                              <>
+                                <Button
+                                  type="button"
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  onClick={() => openRemote(v.remoteUrl!)}
+                                  title="打开原链接"
+                                >
+                                  <ExternalLink className="size-4" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  onClick={() => copyLink(v.id, v.remoteUrl!)}
+                                  title="复制链接"
+                                >
+                                  {copiedId === v.id ? (
+                                    <Check className="size-4 text-green-500" />
+                                  ) : (
+                                    <Copy className="size-4" />
+                                  )}
+                                </Button>
+                              </>
+                            )}
                            {v.videoUrl && (
                              <Button
                                type="button"

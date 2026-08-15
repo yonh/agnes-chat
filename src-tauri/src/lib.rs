@@ -602,7 +602,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct VideoCreateArgs {
     pub prompt: String,
     #[serde(default)]
@@ -709,6 +709,12 @@ async fn generate_video(
     let key = resolve_api_key(&state)?;
 
     let mode = args.mode.clone().unwrap_or_else(|| "text-to-video".to_string());
+
+    eprintln!(
+        "[agnes] generate_video: mode={} resolution={} aspect={} num_frames={} frame_rate={} neg={} seed={:?} keyframes={}",
+        mode, args.resolution, args.aspect_ratio, args.num_frames, args.frame_rate,
+        args.negative_prompt.is_some(), args.seed, args.keyframe_images.is_some()
+    );
 
     let (width, height) = compute_size(&args.resolution, &args.aspect_ratio);
 
