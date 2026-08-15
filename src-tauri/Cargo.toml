@@ -1,0 +1,21 @@
+[package]
+name = "agnes-chat"
+version = "0.1.0"
+description = "Agnes 2.5 Pro chat client powered by Tauri 2"
+authors = ["Sapiens AI"]
+edition = "2021"
+
+[lib]
+name = "agnes_chat_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "stream", "native-tls-vendored"] }
+futures-util = "0.3"
