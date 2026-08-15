@@ -487,17 +487,22 @@ async fn generate_image(
     // the webview never has to decode multi-MB images (which can crash it).
     b64_json = Some(match b64_json {
         Some(b) if b.starts_with("data:") => b,
-        Some(b) => {
+        Some(b) if b.starts_with('/') || !b.is_empty() && !b.starts_with("http") => {
             let mime = if b.starts_with("/9j/") { "image/jpeg" } else { "image/png" };
             format!("data:{};base64,{}", mime, b)
         }
-        None => {
+        _ => {
             let u = url.as_deref().ok_or_else(|| "API 未返回图片 URL 或数据".to_string())?;
             eprintln!("[agnes] downloading original: {} elapsed={:.1}s", u, start.elapsed().as_secs_f32());
             emit_progress("生成完成，正在处理图片（下载/压缩）...");
-            let data = download_compressed(&client, u).await?;
-            eprintln!("[agnes] preview ready: {} bytes elapsed={:.1}s", data.len(), start.elapsed().as_secs_f32());
-            data
+            match download_compressed(&client, u).await {
+                Ok(data) => data,
+                Err(e) => {
+                    // 压缩失败不能导致整体失败：返回空预览，前端将回退到原图 URL 显示
+                    eprintln!("[agnes] preview compression failed, fallback to url: {}", e);
+                    String::new()
+                }
+            }
         }
     });
 

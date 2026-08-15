@@ -172,3 +172,25 @@
 **原因**：下载逻辑写死 `.png`，但 `download_compressed` 已改为 JPEG(85%)。
 
 **解决**：下载文件名改为 `.jpg`。
+
+---
+
+## 17. 图生图"参考图没传"：extra_body 被 serde 展平到顶层
+
+**现象**：图生图生成的图与参考图无关，像没传参考图一样。
+
+**原因**：`ImageRequest.extra_body` 字段带 `#[serde(flatten)]`，导致 `image` 数组被展平到请求体**顶层**，而 Agnes 要求 `image` 必须嵌在 `extra_body.image` 内。服务端识别不到参考图，静默退化为文生图。
+
+**解决**：去掉 `#[serde(flatten)]`，`image`、`response_format` 正确嵌套进 `extra_body`。顺带修复了之前 `response_format` 顶层报 400 的根因。
+
+---
+
+## 18. `response_format: "url"` 后所有图都走下载压缩，但 image 缺 avif 解码 → 预览全丢
+
+**现象**：修复 extra_body 后（显式请求 URL 输出），生成历史的预览图全部看不到。
+
+**原因**：请求体加了 `extra_body.response_format: "url"` 后 API 不再返回 `b64_json`，全部走 `download_compressed` 下载原图压缩。而 `image` crate 只开了 `jpeg/png/webp` 解码特性，Agnes 存储 URL（storage.googleapis.com）常返回 **AVIF**，`load_from_memory` 解码失败 → 命令直接报错，预览无从显示；且压缩失败无 fallback。
+
+**解决**：
+1. Cargo.toml 给 `image` 加 `"avif"` 特性。
+2. `download_compressed` 失败不再 `?` 中断整个命令，改为返回空字符串，前端自动回退到原图 URL 显示（原始方案不丢失预览）。
