@@ -49,6 +49,7 @@ export interface GeneratedImage {
   size: string;
   ratio: string;
   timestamp: number;
+  elapsedMs?: number;
   revisedPrompt?: string;
 }
 

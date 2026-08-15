@@ -92,10 +92,6 @@ struct ImageRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     ratio: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    input_images: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output_format: Option<String>,
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
     extra_body: Option<serde_json::Value>,
 }
 
@@ -387,9 +383,19 @@ pub struct ImageGenerationResult {
 /// Returns a JSON string with the image URL or base64 data
 #[tauri::command]
 async fn generate_image(
+    window: tauri::Window,
     state: State<'_, AppState>,
     args: GenerateImageArgs,
 ) -> Result<String, String> {
+    use std::time::Instant;
+    let start = Instant::now();
+
+    let emit_progress = |msg: &str| {
+        let _ = window.emit("image-progress", msg);
+    };
+
+    emit_progress("正在请求生图服务...");
+
     // Resolve the API key
     let key = state
         .api_key
@@ -398,33 +404,51 @@ async fn generate_image(
         .clone()
         .ok_or_else(|| "未配置 API Key，请在设置中填写或通过环境变量 AGNES_API_KEY 提供".to_string())?;
 
-    // Build the request
-    let client = reqwest::Client::new();
-    
-    // Build extra_body for image input and response format
+    // Client with explicit timeouts so generation can never hang forever
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(360))
+        .build()
+        .map_err(|e| format!("HTTP 客户端初始化失败: {}", e))?;
+
+    // NOTE: Agnes 要求 response_format 放在 extra_body 内（顶层会 400），
+    // image 输入同样放在 extra_body.image（数组）。URL 输出显式声明 url。
     let mut extra_body = serde_json::Map::new();
-    
+    extra_body.insert("response_format".to_string(), serde_json::json!("url"));
+
     if let Some(images) = &args.input_images {
+        let preview: Vec<String> = images
+            .iter()
+            .map(|s| {
+                if s.len() > 200 {
+                    format!("{}...[{} bytes]", &s[..200], s.len())
+                } else {
+                    s.clone()
+                }
+            })
+            .collect();
+        eprintln!("[agnes] input_images (preview): {:?}", preview);
         extra_body.insert("image".to_string(), serde_json::to_value(images).map_err(|e| e.to_string())?);
-    }
-    
-    if let Some(ref format) = args.output_format {
-        extra_body.insert("response_format".to_string(), serde_json::json!(format));
     }
 
     let request = ImageRequest {
         model: IMAGE_MODEL,
-        prompt: args.prompt,
-        size: args.size,
-        ratio: args.ratio,
-        input_images: args.input_images,
-        output_format: args.output_format,
+        prompt: args.prompt.clone(),
+        size: args.size.clone(),
+        ratio: args.ratio.clone(),
         extra_body: if extra_body.is_empty() {
             None
         } else {
             Some(serde_json::Value::Object(extra_body))
         },
     };
+
+    eprintln!(
+        "[agnes] generate_image: size={} ratio={:?} images={:?} output_format={:?} prompt={:?}",
+        args.size, args.ratio, args.input_images.is_some(), args.output_format, &args.prompt[..args.prompt.len().min(60)]
+    );
+
+    emit_progress("正在等待生成结果（1:1 高清图可能需要 1-3 分钟）...");
 
     let resp = client
         .post(format!("{}/images/generations", AGNES_API_BASE))
@@ -434,6 +458,8 @@ async fn generate_image(
         .send()
         .await
         .map_err(|e| format!("网络请求失败: {}", e))?;
+
+    eprintln!("[agnes] API respond: status={} elapsed={:.1}s", resp.status().as_u16(), start.elapsed().as_secs_f32());
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -453,13 +479,106 @@ async fn generate_image(
     }
 
     let result = &response.data[0];
+    let url = result.url.clone();
+    let mut b64_json = result.b64_json.clone();
+
+    // If the API returned a raw base64 payload (no data: prefix), wrap it.
+    // Otherwise download the original and produce a compressed preview so
+    // the webview never has to decode multi-MB images (which can crash it).
+    b64_json = Some(match b64_json {
+        Some(b) if b.starts_with("data:") => b,
+        Some(b) => {
+            let mime = if b.starts_with("/9j/") { "image/jpeg" } else { "image/png" };
+            format!("data:{};base64,{}", mime, b)
+        }
+        None => {
+            let u = url.as_deref().ok_or_else(|| "API 未返回图片 URL 或数据".to_string())?;
+            eprintln!("[agnes] downloading original: {} elapsed={:.1}s", u, start.elapsed().as_secs_f32());
+            emit_progress("生成完成，正在处理图片（下载/压缩）...");
+            let data = download_compressed(&client, u).await?;
+            eprintln!("[agnes] preview ready: {} bytes elapsed={:.1}s", data.len(), start.elapsed().as_secs_f32());
+            data
+        }
+    });
+
     let output = ImageGenerationResult {
-        url: result.url.clone(),
-        b64_json: result.b64_json.clone(),
+        url,
+        b64_json,
         revised_prompt: result.revised_prompt.clone(),
     };
 
-    serde_json::to_string(&output).map_err(|e| format!("序列化错误: {}", e))
+    let out = serde_json::to_string(&output).map_err(|e| format!("序列化错误: {}", e))?;
+    eprintln!("[agnes] generate_image done: total={:.1}s payload={} bytes", start.elapsed().as_secs_f32(), out.len());
+    Ok(out)
+}
+
+const PREVIEW_MAX_DIM: u32 = 1024;
+
+/// Download an image, downscale it to at most PREVIEW_MAX_DIM px on the longest
+/// side, re-encode as JPEG and return as `data:` URL. Never returns multi-MB data.
+async fn download_compressed(client: &reqwest::Client, url: &str) -> Result<String, String> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("图片下载失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("图片下载失败 {}: {}", resp.status().as_u16(), url));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| format!("图片读取失败: {}", e))?;
+    eprintln!("[agnes]   downloaded {} bytes", bytes.len());
+
+    // Decode the original
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("图片解码失败: {}", e))?;
+    eprintln!(
+        "[agnes]   decoded {}x{} format={:?}",
+        img.width(),
+        img.height(),
+        img.color()
+    );
+
+    // Downscale to preview size
+    let (w, h) = (img.width(), img.height());
+    let img = if w.max(h) > PREVIEW_MAX_DIM {
+        let scale = PREVIEW_MAX_DIM as f32 / w.max(h) as f32;
+        img.resize(
+            ((w as f32) * scale).max(1.0) as u32,
+            ((h as f32) * scale).max(1.0) as u32,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        img
+    };
+
+    // Re-encode as JPEG
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85)
+        .encode_image(&img)
+        .map_err(|e| format!("图片压缩失败: {}", e))?;
+    let out = out.into_inner();
+    eprintln!("[agnes]   compressed to {}x{} -> {} bytes", img.width(), img.height(), out.len());
+
+    Ok(format!("data:image/jpeg;base64,{}", base64_encode(&out)))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

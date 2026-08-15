@@ -18,6 +18,7 @@ import {
   FileImage,
   Eye,
   EyeOff,
+  Search,
 } from "lucide-react";
 import type { ChatMessage, StreamChunkEvent, GeneratedImage } from "./types";
 import { SIZE_OPTIONS, RATIO_OPTIONS } from "./types";
@@ -80,7 +81,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             思考中…
           </span>
         ) : (
-          <div className="prose prose-sm dark:prose-invert max-w-none break-words prose-pre:bg-black/40 prose-pre:border prose-pre:border-border prose-pre:text-foreground">
+          <div className="prose prose-sm max-w-none break-words [--tw-prose-body:currentColor] [--tw-prose-headings:currentColor] [--tw-prose-strong:currentColor] [--tw-prose-links:currentColor] [--tw-prose-quotes:currentColor] [--tw-prose-quote-borders:currentColor] prose-pre:bg-black/40 prose-pre:border prose-pre:border-border prose-pre:text-foreground">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
           </div>
         )}
@@ -205,20 +206,17 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
   const [progress, setProgress] = useState("");
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
+  const [viewer, setViewer] = useState<GeneratedImage | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const unlisten = listen<string>("image-progress", (event) => {
-      try {
-        const data = JSON.parse(event.payload as string) as { status: string; message: string };
-        if (data.status === "complete") {
-          setLoading(false);
-          setProgress("");
-        } else {
-          setProgress(data.message);
-        }
-      } catch {
-        // ignore
+      const msg = event.payload
+        .replace(/^"|"$/g, "")
+        .replace(/\\"/g, '"');
+      if (msg) setProgress(msg);
+      else {
+        setProgress("");
       }
     });
     return () => {
@@ -235,12 +233,14 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
       setError("请输入提示词");
       return;
     }
+    if (loading) return;
 
     setLoading(true);
     setError("");
-    setProgress("生成中...");
+    setProgress("正在请求生图服务...");
 
     try {
+      const startedAt = Date.now();
       const result = await invoke("generate_image", {
         args: {
           prompt: prompt.trim(),
@@ -262,10 +262,12 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
         size,
         ratio,
         timestamp: Date.now(),
+        elapsedMs: Date.now() - startedAt,
         revisedPrompt: parsed.revised_prompt,
       };
 
       setGeneratedImages((prev) => [newImage, ...prev]);
+      setLoading(false);
       setProgress("");
     } catch (err) {
       setError(String(err));
@@ -304,14 +306,14 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
       } else if (image.base64) {
         const link = document.createElement("a");
         link.href = image.base64;
-        link.download = `agnes-image-${image.id}.png`;
+        link.download = `agnes-image-${image.id}.jpg`;
         link.click();
       }
     } catch {
       if (image.base64) {
         const link = document.createElement("a");
         link.href = image.base64;
-        link.download = `agnes-image-${image.id}.png`;
+        link.download = `agnes-image-${image.id}.jpg`;
         link.click();
       }
     }
@@ -458,25 +460,47 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {generatedImages.map((img) => (
                 <Card key={img.id} className="overflow-hidden">
-                  <div className="relative aspect-square bg-muted">
-                    {img.url ? (
-                      <img src={img.url} alt={img.prompt} className="size-full object-cover" />
-                    ) : img.base64 ? (
-                      <img src={img.base64} alt={img.prompt} className="size-full object-cover" />
+                  <button
+                    type="button"
+                    className="group relative h-44 w-full block cursor-pointer overflow-hidden bg-muted text-left"
+                    onClick={() => setViewer(img)}
+                    title="点击放大"
+                  >
+                    {img.base64 ? (
+                      <img
+                        src={img.base64}
+                        alt={img.prompt}
+                        loading="lazy"
+                        className="size-full object-cover transition-transform duration-200 group-hover:scale-105"
+                      />
+                    ) : img.url ? (
+                      <img
+                        src={img.url}
+                        alt={img.prompt}
+                        loading="lazy"
+                        className="size-full object-cover transition-transform duration-200 group-hover:scale-105"
+                      />
                     ) : (
                       <div className="flex size-full items-center justify-center text-sm text-muted-foreground">
                         无预览
                       </div>
                     )}
+                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/30 group-hover:opacity-100">
+                      <Search className="size-6 text-white" />
+                    </span>
                     <Button
+                      type="button"
                       size="icon-sm"
                       variant="secondary"
                       className="absolute right-2 bottom-2 backdrop-blur"
-                      onClick={() => downloadImage(img)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        downloadImage(img);
+                      }}
                     >
                       <Download className="size-4" />
                     </Button>
-                  </div>
+                  </button>
                   <CardContent className="space-y-1 p-3">
                     <p className="line-clamp-2 text-xs text-foreground/80">{img.prompt}</p>
                     <div className="flex gap-1.5">
@@ -486,6 +510,11 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
                       <Badge variant="outline" className="text-[10px]">
                         {img.ratio}
                       </Badge>
+                      {img.elapsedMs !== undefined && (
+                        <Badge variant="outline" className="text-[10px]">
+                          {(img.elapsedMs / 1000).toFixed(1)}s
+                        </Badge>
+                      )}
                     </div>
                     {img.revisedPrompt && (
                       <p className="text-[11px] text-muted-foreground italic">优化: {img.revisedPrompt}</p>
@@ -496,6 +525,47 @@ function ImageGenerator({ apiKey }: { apiKey: string }) {
             </div>
           </div>
         )}
+
+        {/* Image viewer (lightbox) */}
+        <Dialog open={viewer !== null} onOpenChange={(open) => !open && setViewer(null)}>
+          <DialogContent
+            showCloseButton={false}
+            className="max-w-[92vw] border-none bg-transparent p-0 ring-0 sm:max-w-[85vw]"
+          >
+            {viewer && (
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-full overflow-hidden rounded-xl bg-black/80">
+                  {viewer.base64 ? (
+                    <img
+                      src={viewer.base64}
+                      alt={viewer.prompt}
+                      className="mx-auto max-h-[75vh] w-auto max-w-full object-contain"
+                    />
+                  ) : viewer.url ? (
+                    <img
+                      src={viewer.url}
+                      alt={viewer.prompt}
+                      className="mx-auto max-h-[75vh] w-auto max-w-full object-contain"
+                    />
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary" className="text-[11px]">
+                    {viewer.size} · {viewer.ratio}
+                  </Badge>
+                  <Button size="sm" variant="secondary" onClick={() => downloadImage(viewer)}>
+                    <Download className="size-4" />
+                    下载原图
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => setViewer(null)}>
+                    <X className="size-4" />
+                    关闭
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ScrollArea>
   );
